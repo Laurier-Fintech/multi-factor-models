@@ -4,8 +4,7 @@ import duckdb
 conn = duckdb.connect('crsp_dataset.duckdb')
 
 # 2️⃣ Create a table from your Parquet file
-# Replace the path with your actual Parquet file path
-parquet_file = r"crsp\CRSPdF20022025.parquet"
+parquet_file = r"C:\Users\agand\Desktop\Personal_Coding\Finance_Projects\MultiFactorModel_LFQA\multi-factor-models\venv\crsp\CRSPdF20022025.parquet"
 
 conn.execute(f"""
     CREATE TABLE IF NOT EXISTS crsp_table AS
