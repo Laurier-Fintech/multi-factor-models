@@ -3,14 +3,14 @@ from datetime import datetime
 import os, psutil
 import numpy as np
 
-file_size = os.path.getsize(r"crsp\CRSPdF20022025.feather") / 1e9
+file_size = os.path.getsize(r"crsp/CRSPdF20022025.feather") / 1e9
 mem_available = psutil.virtual_memory().available / 1e9
 
 print(f"File size: {file_size:.2f} GB")
 print(f"Available RAM: {mem_available:.2f} GB")
-# df = pd.read_csv(r"crsp\CRSPdF20022025 (1).csv")
-# df.to_feather(r"crsp\CRSPdF20022025.feather")
-df = pd.read_feather(r"crsp\CRSPdF20022025.feather")
+# df = pd.read_csv(r"crsp/CRSPdF20022025 (1).csv")
+# df.to_feather(r"crsp/CRSPdF20022025.feather")
+df = pd.read_feather(r"crsp/CRSPdF20022025.feather")
 
 df['date'] = pd.to_datetime(df['date'])
 
