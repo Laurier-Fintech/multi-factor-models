@@ -70,12 +70,15 @@ def main():
     # print("Search response:", json.dumps(search_response, indent=2))
 
     mapping_request = [
-        {"idType":"ID_CUSIP", "idValue":"045409B32"}
+        {"idType":"ID_CUSIP", "idValue":"037833100"}
     ]
 
     print("Making a mapping request:", mapping_request)
     mapping_response = api_call("/v3/mapping", mapping_request)
-    print("Mapping response:", json.dumps(mapping_response, indent=2))
+    filename = os.path.join("outputs", "openfigi_results.json")
+    with open(filename, "w", encoding="utf-8") as f:
+        json.dump(mapping_response[0]["data"][0], f, indent=2, ensure_ascii=False)
+    print(f"Wrote mapping response to {filename}")
 
 
 if __name__ == "__main__":
