@@ -4,8 +4,9 @@ import pandas as pd
 import os
 
 DB_PATH = Path(__file__).parent / "crsp_dataset.duckdb"
-OUTPUT_DIR = Path(__file__).parent / "outputs"
-OUTPUT_DIR.mkdir(exist_ok=True)
+# Use repo-level outputs directory (moved location)
+OUTPUT_DIR = Path(__file__).parent.parent / "outputs"
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 def get_connection(read_only: bool = True):
     return duckdb.connect(database=str(DB_PATH), read_only=read_only)
