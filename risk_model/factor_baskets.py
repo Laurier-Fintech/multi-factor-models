@@ -76,6 +76,7 @@ def create_ls_factor_baskets(conn):
 if __name__ == "__main__":
     conn = duckdb.connect(new_db_path)
     df = creating_factor_baskets(conn)
+    print(df)
     df = create_ls_factor_baskets(conn)
     print(df)
 

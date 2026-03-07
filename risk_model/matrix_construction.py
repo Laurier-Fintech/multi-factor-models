@@ -344,12 +344,12 @@ if __name__ == "__main__":
     conn = duckdb.connect(new_db_path)
     B_matrix_construction(conn, start_date, end_date)
     df = factor_covariance_matrix(conn, start_date, end_date, table_name="factor_covariance_matrix")
-    # print(df)
+    print(df)
     preview, diag = specific_risk_diagonal_matrix(conn, start_date, end_date, out_var_table="specific_variance", out_diag_table="sigma_e_diagonal_matrix")
-    # print("Preview of specific variance table:")
-    # print(preview)
-    # print("Preview of diagonal matrix table:")
-    # print(diag)
+    print("Preview of specific variance table:")
+    print(preview)
+    print("Preview of diagonal matrix table:")
+    print(diag)
 
     Sigma, assets = implied_asset_covariance_factor_model(
     conn,
