@@ -18,6 +18,7 @@ Outputs:
         - optionally z-scored signals
 """
 from __future__ import annotations
+import os
 
 from signal_lib.amihud import compute_amihud_expr
 from signal_lib.vol import compute_volatility_expr
@@ -185,14 +186,26 @@ def preview_signals(
 
 def test_signal_building():
     print("Building Signals...")
-    build_signals(con=conn,output_table="alpha_signals_test1")
+    build_signals(con=conn,output_table="alpha_signals")
     print("Built Signals.")
+
+def cleanup_signal_tables(con: duckdb.DuckDBPyConnection, tables_to_remove: list[str]) -> None:
+      existing = set(con.execute("SHOW TABLES").df()["name"].tolist())
+      for table in tables_to_remove:
+          if table in existing:
+              con.execute(f"DROP TABLE {table}")
+              print(f"Dropped: {table}")
+          else:
+              print(f"Skipped (not found): {table}")
 
 
 if __name__ == "__main__":
     print("Attempting to connect to DB.")
-    new_db_path = r"C:\Users\agand\Desktop\Personal_Coding\Finance_Projects\MultiFactorModel_LFQA\multi-factor-models\venv\crsp\new_factor_data.duckdb"
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+    new_db_path = os.path.join(project_root, "new_factor_data.duckdb")
     conn = duckdb.connect(new_db_path)
+
     print("Connected to DB")
     tables = pd.DataFrame(conn.execute("SHOW TABLES;").fetch_df())
     print(tables)
@@ -200,19 +213,25 @@ if __name__ == "__main__":
     
     test_signal_building()
 
-    table_name = "alpha_signals_test1_raw"
+    table_name = "alpha_signals"
     print(f"Displaying preview of {table_name}...")
     print(preview_signals(con=conn, table_name=table_name))
     print("Done.")
 
     print("------------------------------------------------------------------------------------------------------")
 
-    table_name = "alpha_signals_test1"
+    table_name = "alpha_signals"
     print(f"Displaying preview of {table_name}...")
     print(preview_signals(con=conn, table_name=table_name))
     print("Done.")
     
-
+    cleanup_signal_tables(conn, [
+        "alpha_signals_raw",
+        "alpha_signals_test1",
+        "alpha_signals_test1_raw",
+    ])
+    tables = pd.DataFrame(conn.execute("SHOW TABLES;").fetch_df())
+    print(tables)
     conn.close()
     print("Connection Closed.")
 
