@@ -1,0 +1,8 @@
+── PERFORMANCE METRICS ──────────────────────────
+  Total return          : 52.74%
+  Annualised return     : 8.84%
+  Annualised vol        : 3.63%
+  Sharpe ratio          : 2.44
+  Max drawdown          : -2.96%
+  Hit rate              : 63.89%
+  N periods             : 252

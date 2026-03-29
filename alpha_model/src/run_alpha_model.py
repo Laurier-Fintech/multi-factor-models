@@ -30,10 +30,10 @@ def compute_splits(conn, table, start_date, end_date, train_pct=0.8, val_pct=0.1
 
 
  # ── Config ────────────────────────────────────────────────────────────────────
-START_DATE  = "2005-01-03"
-END_DATE    = "2006-01-04"
+START_DATE  = "2004-01-07"
+END_DATE    = "2023-11-23"
 SIGNAL_DATE = END_DATE       # score stocks as of the last day of the period
-HORIZON     = 5
+HORIZON     = 30
 
 # ── Connect ───────────────────────────────────────────────────────────────────
 project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -270,31 +270,6 @@ def print_run_summary(conn, table, start_date, end_date, val_end, test_end,
     print(scores[["cusip", "mu", "alpha_score"]].tail(10).to_string(index=False))
 
     print("\n" + "═" * 64 + "\n")
-
-# ── Pipeline ──────────────────────────────────────────────────────────────────
-print("Creating forward returns...")
-create_forward_return(conn, source_table="alpha_signals", horizon=HORIZON)
-TRAIN_END, VAL_END = compute_splits(conn, "alpha_signals_with_fwd", START_DATE, END_DATE)
-validate_dates(conn, "alpha_signals_with_fwd", START_DATE, END_DATE, SIGNAL_DATE)
-
-print(f"Fitting model on {START_DATE} → {TRAIN_END}...")
-model, signal_cols, ic_mean, ic_ir = fit_model(
-    conn,
-    table="alpha_signals_with_fwd",
-    start_date=START_DATE,
-    end_date=TRAIN_END,
-    horizon=HORIZON,
-)
-
-print(f"Scoring stocks as of {SIGNAL_DATE}...")
-scores = score_signals(conn, model, SIGNAL_DATE, "alpha_signals_with_fwd", signal_cols)
-
-print_run_summary(
-      conn, "alpha_signals_with_fwd",
-      START_DATE, TRAIN_END, VAL_END, END_DATE,
-      SIGNAL_DATE, HORIZON, model, signal_cols, ic_mean, ic_ir, scores
-  )
-
 # ── Diagnostics plots ─────────────────────────────────────────────────────────
 def plot_model_diagnostics(conn, model, signal_cols, table, start_date, end_date, horizon):
     target_col = f"fwd_ret_{horizon}d"
@@ -472,10 +447,40 @@ def plot_training_analysis(conn, model, signal_cols, table,
       plt.show()
 
 
-plot_model_diagnostics(conn, model, signal_cols, "alpha_signals_with_fwd",
-                         START_DATE, TRAIN_END, HORIZON)
-plot_training_analysis(
-      conn, model, signal_cols, "alpha_signals_with_fwd",
-      START_DATE, TRAIN_END, VAL_END, END_DATE, HORIZON
-  )
-conn.close()
+def run_alpha_model(start_date, end_date, signal_date, horizon):
+    # ── Pipeline ──────────────────────────────────────────────────────────────────
+    print("Creating forward returns...")
+    create_forward_return(conn, source_table="alpha_signals", horizon=HORIZON)
+    TRAIN_END, VAL_END = compute_splits(conn, "alpha_signals_with_fwd", START_DATE, END_DATE)
+    validate_dates(conn, "alpha_signals_with_fwd", START_DATE, END_DATE, SIGNAL_DATE)
+
+    print(f"Fitting model on {START_DATE} → {TRAIN_END}...")
+    model, signal_cols, ic_mean, ic_ir = fit_model(
+        conn,
+        table="alpha_signals_with_fwd",
+        start_date=START_DATE,
+        end_date=TRAIN_END,
+        horizon=HORIZON,
+    )
+
+    print(f"Scoring stocks as of {SIGNAL_DATE}...")
+    scores = score_signals(conn, model, SIGNAL_DATE, "alpha_signals_with_fwd", signal_cols)
+
+    print_run_summary(
+        conn, "alpha_signals_with_fwd",
+        START_DATE, TRAIN_END, VAL_END, END_DATE,
+        SIGNAL_DATE, HORIZON, model, signal_cols, ic_mean, ic_ir, scores
+    )
+
+
+
+    plot_model_diagnostics(conn, model, signal_cols, "alpha_signals_with_fwd",
+                            START_DATE, TRAIN_END, HORIZON)
+    plot_training_analysis(
+        conn, model, signal_cols, "alpha_signals_with_fwd",
+        START_DATE, TRAIN_END, VAL_END, END_DATE, HORIZON
+    )
+    conn.close()
+
+if __name__ == "__main__":
+    run_alpha_model(START_DATE, END_DATE, SIGNAL_DATE, HORIZON)

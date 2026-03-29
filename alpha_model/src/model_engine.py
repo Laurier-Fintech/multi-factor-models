@@ -12,13 +12,20 @@ from scipy.stats import spearmanr
 
 
 SIGNAL_COLS = [
-    "momentum_z",
-    "reversal_z",
-    "volatility_z",
-    "turnover_z",
-    "spread_z",
-    "amihud_illiquidity_z",
-]
+      "momentum_z",
+      "momentum_med_z",
+      "reversal_z",
+      "volatility_z",
+      "downside_vol_z",
+      "turnover_z",
+      "spread_z",
+      "amihud_illiquidity_z",
+      "high52w_z",
+      "max_ret_z",
+      "rel_volume_z",
+      "skewness_z",
+      "range_vol_z",
+  ]
 
 
 def fit_model(

@@ -114,7 +114,7 @@ def B_matrix_construction(conn, start_date, end_date):
       conn.register("betas_df", betas_df)
       conn.execute("CREATE TABLE factor_loadings AS SELECT * FROM betas_df;")
 
-      print(conn.execute("SELECT * FROM factor_loadings ORDER BY cusip LIMIT 5").fetch_df())
+      #print(conn.execute("SELECT * FROM factor_loadings ORDER BY cusip LIMIT 5").fetch_df())
 
 def factor_covariance_matrix(conn, start_date, end_date, annualization_factor=252, table_name="factor_covariance_annual"):
       # 1) Discover factors dynamically

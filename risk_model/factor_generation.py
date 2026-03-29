@@ -220,10 +220,6 @@ def generate_sector_factors(conn):
         LIMIT 5
     """).fetch_df()
 
-
-    
-
-
 def generate_cusip_sector_table(conn):
     conn.execute("""
         DROP TABLE IF EXISTS cusip_sector_table;
@@ -281,60 +277,72 @@ def calculate_rolling_factors(conn):
                 ELSE ln(1.0 + c.ret)
             END AS logret
         FROM crsp_clean c
-        LEFT JOIN industry_map im
-          ON c.cusip = im.cusip
+        LEFT JOIN industry_map im ON c.cusip = im.cusip
     ),
     roll AS (
         SELECT
             b.*,
 
+            -- 12m-1m momentum
             sum(logret) OVER (
-                PARTITION BY cusip
-                ORDER BY date
+                PARTITION BY cusip ORDER BY date
                 ROWS BETWEEN 252 PRECEDING AND 21 PRECEDING
             ) AS sum_logret_12m_1m,
-
             count(logret) OVER (
-                PARTITION BY cusip
-                ORDER BY date
+                PARTITION BY cusip ORDER BY date
                 ROWS BETWEEN 252 PRECEDING AND 21 PRECEDING
             ) AS nobs_mom_12m_1m,
 
+            -- size
             avg(market_cap) OVER (
-                PARTITION BY cusip
-                ORDER BY date
+                PARTITION BY cusip ORDER BY date
                 ROWS BETWEEN 252 PRECEDING AND 21 PRECEDING
             ) AS avg_market_cap_12m_1m,
-
-            avg(turnover) OVER (
-                PARTITION BY cusip
-                ORDER BY date
-                ROWS BETWEEN 252 PRECEDING AND 21 PRECEDING
-            ) AS avg_turnover_12m_1m,
-
-            avg(bid_ask_spread) OVER (
-                PARTITION BY cusip
-                ORDER BY date
-                ROWS BETWEEN 252 PRECEDING AND 21 PRECEDING
-            ) AS avg_bid_ask_spread_12m_1m,
-
             count(market_cap) OVER (
-                PARTITION BY cusip
-                ORDER BY date
+                PARTITION BY cusip ORDER BY date
                 ROWS BETWEEN 252 PRECEDING AND 21 PRECEDING
             ) AS nobs_mcap_12m_1m,
 
+            -- turnover
+            avg(turnover) OVER (
+                PARTITION BY cusip ORDER BY date
+                ROWS BETWEEN 252 PRECEDING AND 21 PRECEDING
+            ) AS avg_turnover_12m_1m,
             count(turnover) OVER (
-                PARTITION BY cusip
-                ORDER BY date
+                PARTITION BY cusip ORDER BY date
                 ROWS BETWEEN 252 PRECEDING AND 21 PRECEDING
             ) AS nobs_tov_12m_1m,
 
-            count(bid_ask_spread) OVER (
-                PARTITION BY cusip
-                ORDER BY date
+            -- spread
+            avg(bid_ask_spread) OVER (
+                PARTITION BY cusip ORDER BY date
                 ROWS BETWEEN 252 PRECEDING AND 21 PRECEDING
-            ) AS nobs_bas_12m_1m
+            ) AS avg_bid_ask_spread_12m_1m,
+            count(bid_ask_spread) OVER (
+                PARTITION BY cusip ORDER BY date
+                ROWS BETWEEN 252 PRECEDING AND 21 PRECEDING
+            ) AS nobs_bas_12m_1m,
+
+            -- volatility (12m-1m window, same as momentum)
+            stddev_samp(ret) OVER (
+                PARTITION BY cusip ORDER BY date
+                ROWS BETWEEN 252 PRECEDING AND 21 PRECEDING
+            ) AS avg_volatility_12m_1m,
+            count(ret) OVER (
+                PARTITION BY cusip ORDER BY date
+                ROWS BETWEEN 252 PRECEDING AND 21 PRECEDING
+            ) AS nobs_vol_12m_1m,
+
+            -- short-term reversal (1-month return)
+            sum(logret) OVER (
+                PARTITION BY cusip ORDER BY date
+                ROWS BETWEEN 21 PRECEDING AND 1 PRECEDING
+            ) AS sum_logret_1m,
+            count(logret) OVER (
+                PARTITION BY cusip ORDER BY date
+                ROWS BETWEEN 21 PRECEDING AND 1 PRECEDING
+            ) AS nobs_rev_1m
+
         FROM base b
     )
     SELECT
@@ -342,14 +350,12 @@ def calculate_rolling_factors(conn):
         market_cap, turnover, bid_ask_spread,
         industry,
 
-        CASE
-            WHEN nobs_mom_12m_1m = 232 THEN exp(sum_logret_12m_1m) - 1.0
-            ELSE NULL
-        END AS momentum_12m_1m,
-
-        CASE WHEN nobs_mcap_12m_1m = 232 THEN avg_market_cap_12m_1m ELSE NULL END AS avg_market_cap_12m_1m,
-        CASE WHEN nobs_tov_12m_1m  = 232 THEN avg_turnover_12m_1m  ELSE NULL END AS avg_turnover_12m_1m,
-        CASE WHEN nobs_bas_12m_1m  = 232 THEN avg_bid_ask_spread_12m_1m ELSE NULL END AS avg_bid_ask_spread_12m_1m
+        CASE WHEN nobs_mom_12m_1m  = 232 THEN exp(sum_logret_12m_1m) - 1.0 ELSE NULL END AS momentum_12m_1m,
+        CASE WHEN nobs_mcap_12m_1m = 232 THEN avg_market_cap_12m_1m          ELSE NULL END AS avg_market_cap_12m_1m,
+        CASE WHEN nobs_tov_12m_1m  = 232 THEN avg_turnover_12m_1m            ELSE NULL END AS avg_turnover_12m_1m,
+        CASE WHEN nobs_bas_12m_1m  = 232 THEN avg_bid_ask_spread_12m_1m      ELSE NULL END AS avg_bid_ask_spread_12m_1m,
+        CASE WHEN nobs_vol_12m_1m  = 232 THEN avg_volatility_12m_1m          ELSE NULL END AS avg_volatility_12m_1m,
+        CASE WHEN nobs_rev_1m      = 21  THEN exp(sum_logret_1m) - 1.0       ELSE NULL END AS momentum_1m
 
     FROM roll
     ORDER BY cusip, date;
@@ -360,10 +366,12 @@ def calculate_rolling_factors(conn):
         CREATE TABLE daily_factors_table_clean AS
         SELECT *
         FROM daily_factors_table
-        WHERE momentum_12m_1m IS NOT NULL
-          AND avg_market_cap_12m_1m IS NOT NULL
-          AND avg_turnover_12m_1m IS NOT NULL
-          AND avg_bid_ask_spread_12m_1m IS NOT NULL;
+        WHERE momentum_12m_1m         IS NOT NULL
+        AND avg_market_cap_12m_1m   IS NOT NULL
+        AND avg_turnover_12m_1m     IS NOT NULL
+        AND avg_bid_ask_spread_12m_1m IS NOT NULL
+        AND avg_volatility_12m_1m   IS NOT NULL
+        AND momentum_1m             IS NOT NULL;
     """)
 
     return conn.execute("""
@@ -372,11 +380,6 @@ def calculate_rolling_factors(conn):
         ORDER BY date ASC, cusip
         LIMIT 5
     """).fetch_df()
-
-
-
-
-
 
 
 if __name__ == "__main__":
