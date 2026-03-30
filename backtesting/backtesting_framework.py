@@ -26,7 +26,6 @@ def get_trading_dates(conn, start, end):
         ORDER BY date
     """).fetch_df()["date"].values
 
-
 def get_realised_return(conn, weights_df, signal_date, horizon):
     """
     Compute portfolio return from signal_date over the next horizon trading days.
@@ -68,22 +67,23 @@ def get_realised_return(conn, weights_df, signal_date, horizon):
     portfolio_return = float((merged["weight"] * merged["period_ret"]).sum())
     return portfolio_return, period_end
 
-def save_backtest_results(returns_df, weights_history, backtest_start, backtest_end):
-    """Save return series and weights history to CSVs in backtesting/results/."""
+def save_backtest_results(returns_df, weights_history, diagnostics_df, backtest_start, backtest_end):
     results_dir = os.path.join(_here, "results")
     os.makedirs(results_dir, exist_ok=True)
 
     tag = f"{backtest_start}_to_{backtest_end}"
 
-    returns_path = os.path.join(results_dir, f"returns_{tag}.csv")
-    weights_path = os.path.join(results_dir, f"weights_{tag}.csv")
+    returns_path     = os.path.join(results_dir, f"returns_{tag}.csv")
+    weights_path     = os.path.join(results_dir, f"weights_{tag}.csv")
+    diagnostics_path = os.path.join(results_dir, f"diagnostics_{tag}.csv")
 
     returns_df.to_csv(returns_path, index=False)
     weights_history.to_csv(weights_path, index=False)
+    diagnostics_df.to_csv(diagnostics_path, index=False)
 
-    print(f"  Returns saved  → {returns_path}")
-    print(f"  Weights saved  → {weights_path}")
-
+    print(f"  Returns saved     → {returns_path}")
+    print(f"  Weights saved     → {weights_path}")
+    print(f"  Diagnostics saved → {diagnostics_path}")
 
 def run_backtest(
     backtest_start,
@@ -93,16 +93,18 @@ def run_backtest(
     horizon=5,
     quantile=0.1,
     lambda_risk=1.0,
+    long_only=False,
     save_results=True,
 ):
     conn = duckdb.connect(db_path)
     all_dates = get_trading_dates(conn, backtest_start, backtest_end)
     conn.close()
 
-    rebalance_dates = all_dates[::rebalance_days]
-    total           = len(rebalance_dates)
-    records         = []
-    weights_records = []
+    rebalance_dates  = all_dates[::rebalance_days]
+    total            = len(rebalance_dates)
+    records          = []
+    weights_records  = []
+    diagnostics_records = []
 
     for i, signal_date in enumerate(rebalance_dates):
         signal_date_str = str(signal_date)[:10]
@@ -111,12 +113,13 @@ def run_backtest(
         print_progress(i + 1, total, signal_date_str)
 
         try:
-            weights_df = get_portfolio_weights(
+            weights_df, diagnostics = get_portfolio_weights(
                 start_date=train_start,
                 end_date=signal_date_str,
                 horizon=horizon,
                 quantile=quantile,
                 lambda_risk=lambda_risk,
+                long_only=long_only,
             )
 
             conn   = duckdb.connect(db_path)
@@ -136,7 +139,15 @@ def run_backtest(
                 "n_positions":      len(weights_df),
             })
 
-            # Store weights in long format
+            diagnostics_records.append({
+                "date":     signal_date_str,
+                "ic_mean":  diagnostics["ic_mean"],
+                "ic_ir":    diagnostics["ic_ir"],
+                "pred_vol": diagnostics["pred_vol"],
+                "n_longs":  diagnostics["n_longs"],
+                "n_shorts": diagnostics["n_shorts"],
+            })
+
             w = weights_df.copy()
             w["date"] = signal_date_str
             weights_records.append(w[["date", "cusip", "weight", "side", "mu"]])
@@ -151,13 +162,14 @@ def run_backtest(
     returns_df["date"]       = pd.to_datetime(returns_df["date"])
     returns_df["cumulative"] = (1 + returns_df["portfolio_return"]).cumprod() - 1
 
-    weights_history = pd.concat(weights_records, ignore_index=True) if weights_records else pd.DataFrame()
+    weights_history  = pd.concat(weights_records, ignore_index=True) if weights_records else pd.DataFrame()
+    diagnostics_df   = pd.DataFrame(diagnostics_records)
+    diagnostics_df["date"] = pd.to_datetime(diagnostics_df["date"])
 
     if save_results:
-        save_backtest_results(returns_df, weights_history, backtest_start, backtest_end)
+        save_backtest_results(returns_df, weights_history, diagnostics_df, backtest_start, backtest_end)
 
-    return returns_df, weights_history
-
+    return returns_df, weights_history, diagnostics_df
 
 def compute_metrics(returns_df, rebalance_days=5):
       r = returns_df["portfolio_return"]
@@ -186,7 +198,6 @@ def compute_metrics(returns_df, rebalance_days=5):
           "Hit rate":           f"{hit_rate:.2%}",
           "N periods":          n_periods,
       }
-
 
 def plot_backtest(returns_df, rolling_window=12, rebalance_days=5):
     r   = returns_df["portfolio_return"]
@@ -271,15 +282,67 @@ def print_progress(current, total, signal_date, port_ret=None):
       ret_str  = f"  last return: {port_ret:+.4f}" if port_ret is not None else ""
       print(f"\r  [{bar}] {current}/{total}  {signal_date}{ret_str}   ", end="", flush=True)
 
+def plot_model_diagnostics(diagnostics_df, rolling_window=12):
+    d = diagnostics_df.copy()
+
+    roll_ic     = d["ic_mean"].rolling(rolling_window).mean()
+    cum_ic      = d["ic_mean"].cumsum()
+
+    fig, axes = plt.subplots(2, 2, figsize=(16, 10))
+    fig.suptitle("Walk-Forward Model Diagnostics", fontsize=13)
+
+    # 1) Per-period IC with rolling mean
+    ax = axes[0, 0]
+    ax.bar(d["date"], d["ic_mean"], color=["steelblue" if v >= 0 else "tomato" for v in d["ic_mean"]],
+            alpha=0.5, width=5)
+    ax.plot(d["date"], roll_ic, color="steelblue", linewidth=1.5,
+            label=f"Rolling {rolling_window}-period mean")
+    ax.axhline(0, color="black", linewidth=0.5, linestyle="--")
+    ax.set_title("Alpha Model — Per-Period IC")
+    ax.set_ylabel("IC (Spearman rank corr)")
+    ax.legend(fontsize=8)
+
+    # 2) Cumulative IC
+    ax = axes[0, 1]
+    ax.plot(d["date"], cum_ic, color="steelblue", linewidth=1.5)
+    ax.axhline(0, color="black", linewidth=0.5, linestyle="--")
+    ax.set_title("Alpha Model — Cumulative IC")
+    ax.set_ylabel("Cumulative IC")
+
+    # 3) IC IR over time
+    ax = axes[1, 0]
+    roll_ir = (d["ic_mean"].rolling(rolling_window).mean()
+                / d["ic_mean"].rolling(rolling_window).std())
+    ax.plot(d["date"], roll_ir, color="steelblue", linewidth=1.2)
+    ax.axhline(0,    color="black",  linewidth=0.5, linestyle="--")
+    ax.axhline(0.5,  color="green",  linewidth=0.5, linestyle="--", alpha=0.6)
+    ax.axhline(-0.5, color="tomato", linewidth=0.5, linestyle="--", alpha=0.6)
+    ax.set_title(f"Alpha Model — Rolling IC IR ({rolling_window}-period)")
+    ax.set_ylabel("IC IR")
+
+    # 4) Risk model predicted vol over time
+    ax = axes[1, 1]
+    ax.plot(d["date"], d["pred_vol"] * 100, color="orange", linewidth=1.2)
+    ax.set_title("Risk Model — Predicted Portfolio Vol (ex-ante)")
+    ax.set_ylabel("Predicted vol (%)")
+
+    for ax in axes.flat:
+        ax.tick_params(axis="x", rotation=30)
+
+    plt.tight_layout()
+    plt.show()
+
+
 if __name__ == "__main__":
-    returns_df, weights_history = run_backtest(
-        backtest_start="2005-01-06",
+    returns_df, weights_history, diagnostics_df = run_backtest(
+        backtest_start="2023-01-06",
         backtest_end="2023-11-23",
-        lookback_days=252,
+        lookback_days=1460,
         rebalance_days=5,
         horizon=5,
         quantile=0.05,
         lambda_risk=1.0,
+        long_only=False,
         save_results=True,
     )
 
@@ -288,3 +351,4 @@ if __name__ == "__main__":
         print(f"  {k:<22}: {v}")
 
     plot_backtest(returns_df, rebalance_days=10)
+    plot_model_diagnostics(diagnostics_df)

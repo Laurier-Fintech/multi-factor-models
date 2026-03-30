@@ -29,36 +29,24 @@ sys.path.append(os.path.join(project_root, 'alpha_model', 'src'))
 sys.path.append(os.path.join(project_root, 'alpha_model', 'src', 'signal_lib'))
 sys.path.append(os.path.join(project_root, 'risk_model'))
 
-def select_universe(scores, quantile=0.1, min_price=5.0):
-    """
-    Select long and short candidates from alpha scores.
-    - quantile: top/bottom fraction to select (0.1 = decile)
-    - min_price: liquidity filter applied before scoring
-    Returns combined df of selected stocks with a 'side' column (1=long, -1=short).
-    """
-    n = int(len(scores) * quantile)
-    longs  = scores.head(n).copy()
-    shorts = scores.tail(n).copy()
-    longs["side"]  =  1
-    shorts["side"] = -1
-    return pd.concat([longs, shorts], ignore_index=True)
+def select_universe(scores, quantile=0.1, long_only=False):
+      n      = int(len(scores) * quantile)
+      longs  = scores.head(n).copy()
+      longs["side"] = 1
+
+      if long_only:
+          return longs
+
+      shorts = scores.tail(n).copy()
+      shorts["side"] = -1
+      return pd.concat([longs, shorts], ignore_index=True)
 
 
-def get_portfolio_weights(start_date, end_date, horizon=5, quantile=0.1, lambda_risk=1.0):
-    """
-    Full pipeline: alpha model → universe selection → risk model → weights.
-
-    Parameters
-    ----------
-    start_date  : training window start
-    end_date    : training window end / signal date
-    horizon     : forward return horizon in trading days
-    quantile    : top/bottom fraction of scored universe to trade
-    lambda_risk : risk aversion parameter in mean-variance optimisation
-    """
+def get_portfolio_weights(
+    start_date, end_date, horizon=5, quantile=0.1, lambda_risk=1.0, long_only=False
+):
     conn = duckdb.connect(db_path)
 
-    # ── Step 1: Alpha model ───────────────────────────────────────────────────
     create_forward_return(conn, source_table="alpha_signals", horizon=horizon)
 
     train_end = conn.execute(f"""
@@ -76,31 +64,34 @@ def get_portfolio_weights(start_date, end_date, horizon=5, quantile=0.1, lambda_
         end_date=train_end,
         horizon=horizon,
     )
-    # print(f"  Alpha model  —  IC mean: {ic_mean:.4f}  |  IC IR: {ic_ir:.4f}")
 
-    scores = score_signals(conn, model, end_date, "alpha_signals_with_fwd", signal_cols)
-
-    # ── Step 2: Universe selection ────────────────────────────────────────────
-    selected = select_universe(scores, quantile=quantile)
+    scores   = score_signals(conn, model, end_date, "alpha_signals_with_fwd", signal_cols)
+    selected = select_universe(scores, quantile=quantile, long_only=long_only)
     cusips   = selected["cusip"].tolist()
-    # print(f"  Universe     —  {len(cusips)} stocks  ({len(cusips)//2} long / {len(cusips)//2} short)")
 
-    # ── Step 3: Risk model (full universe, then subset for covariance) ────────
     B_matrix_construction(conn, start_date, end_date)
     factor_covariance_matrix(conn, start_date, end_date, table_name="factor_covariance_matrix")
     specific_risk_diagonal_matrix(conn, start_date, end_date)
 
     Sigma, cusip_list = implied_asset_covariance_factor_model(
-        conn,
-        start_date=start_date,
-        end_date=end_date,
-        cusips=cusips,          # ← only build N×N for selected stocks
+        conn, start_date=start_date, end_date=end_date, cusips=cusips,
     )
-    # print(f"  Risk model   —  Σ shape: {Sigma.shape}")
 
-    # ── Step 4: Mean-variance optimisation ────────────────────────────────────
     mu_series = selected.set_index("cusip")["mu"].reindex(cusip_list).values
-    weights   = mean_variance_weights(mu_series, Sigma, lambda_risk)
+    weights   = mean_variance_weights(mu_series, Sigma, lambda_risk, long_only=long_only)
+
+    # ── Diagnostics ───────────────────────────────────────────────────────────
+    pred_var  = float(weights @ Sigma @ weights)
+    n_longs   = int((selected["side"] ==  1).sum())
+    n_shorts  = int((selected["side"] == -1).sum())
+
+    diagnostics = {
+        "ic_mean":  ic_mean,
+        "ic_ir":    ic_ir,
+        "pred_vol": float(np.sqrt(max(pred_var, 0))),
+        "n_longs":  n_longs,
+        "n_shorts": n_shorts,
+    }
 
     result = pd.DataFrame({
         "cusip":  cusip_list,
@@ -109,24 +100,29 @@ def get_portfolio_weights(start_date, end_date, horizon=5, quantile=0.1, lambda_
         "side":   selected.set_index("cusip")["side"].reindex(cusip_list).values,
     }).sort_values("weight", ascending=False)
 
-    # print(f"scores shape: {scores.shape}")
-    # print(f"selected shape: {selected.shape}")
-    # print(f"cusips len: {len(cusips)}")
-    # print(f"cusip_list len: {len(cusip_list)}")
-    # print(f"unique cusips in result: {result['cusip'].nunique()}")
     conn.close()
-    return result
+    return result, diagnostics
 
 
-def mean_variance_weights(mu, Sigma, lambda_risk=1.0):
-    """
-    Unconstrained mean-variance: w = (1/lambda) * Sigma^{-1} * mu, rescaled to sum to 1.
-    """
-    Sigma_inv = np.linalg.inv(Sigma)
-    w = (1.0 / lambda_risk) * Sigma_inv @ mu
-    # Rescale so absolute weights sum to 1 (dollar-neutral long/short)
-    w = w / np.abs(w).sum()
-    return w
+def mean_variance_weights(mu, Sigma, lambda_risk=1.0, long_only=False):
+      """
+      Unconstrained MV: w = (1/lambda) * Sigma^{-1} * mu.
+      Long-only: negative weights are clipped to zero before normalising.
+      """
+      Sigma_inv = np.linalg.inv(Sigma)
+      w = (1.0 / lambda_risk) * Sigma_inv @ mu
+
+      if long_only:
+          w = np.clip(w, 0, None)        # drop any negative-weight suggestions
+          total = w.sum()
+          if total <= 0:
+              w = np.ones(len(w)) / len(w)   # fallback: equal weight if all clipped
+          else:
+              w = w / total              # weights sum to 1
+      else:
+          w = w / np.abs(w).sum()        # dollar-neutral: sum(|w|) = 1
+
+      return w
 
 if __name__ == "__main__":
     start_date  = "2005-01-03"
