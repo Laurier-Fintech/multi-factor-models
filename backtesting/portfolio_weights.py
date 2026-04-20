@@ -78,7 +78,7 @@ def get_portfolio_weights(
     )
 
     mu_series = selected.set_index("cusip")["mu"].reindex(cusip_list).values
-    weights   = mean_variance_weights(mu_series, Sigma, lambda_risk, long_only=long_only)
+    weights = mean_variance_weights(mu_series, Sigma, lambda_risk, long_only=long_only, max_weight=0.05)
 
     # ── Diagnostics ───────────────────────────────────────────────────────────
     pred_var  = float(weights @ Sigma @ weights)
@@ -104,25 +104,50 @@ def get_portfolio_weights(
     return result, diagnostics
 
 
-def mean_variance_weights(mu, Sigma, lambda_risk=1.0, long_only=False):
-      """
-      Unconstrained MV: w = (1/lambda) * Sigma^{-1} * mu.
-      Long-only: negative weights are clipped to zero before normalising.
-      """
-      Sigma_inv = np.linalg.inv(Sigma)
-      w = (1.0 / lambda_risk) * Sigma_inv @ mu
+def mean_variance_weights(mu, Sigma, lambda_risk=1.0, long_only=False, max_weight=0.05):
+    """
+    MV weights with dollar-neutrality enforcement and per-position cap.
+    Long-only: weights sum to 1, no shorts.
+    Long-short: longs sum to +0.5, shorts sum to -0.5 (dollar neutral, gross=1).
+    max_weight: per-position cap as fraction of gross notional.
+    """
+    Sigma_inv = np.linalg.inv(Sigma)
+    w = (1.0 / lambda_risk) * Sigma_inv @ mu
 
-      if long_only:
-          w = np.clip(w, 0, None)        # drop any negative-weight suggestions
-          total = w.sum()
-          if total <= 0:
-              w = np.ones(len(w)) / len(w)   # fallback: equal weight if all clipped
-          else:
-              w = w / total              # weights sum to 1
-      else:
-          w = w / np.abs(w).sum()        # dollar-neutral: sum(|w|) = 1
+    if long_only:
+        w = np.clip(w, 0, None)
+        total = w.sum()
+        if total <= 0:
+            w = np.ones(len(w)) / len(w)
+        else:
+            w = w / total
+    else:
+        # Split into long and short legs, normalize each to ±0.5
+        pos = np.maximum(w, 0)
+        neg = np.minimum(w, 0)
+        pos_sum = pos.sum()
+        neg_sum = np.abs(neg).sum()
+        if pos_sum > 0:
+            pos = pos / pos_sum * 0.5
+        if neg_sum > 0:
+            neg = neg / neg_sum * 0.5
+        w = pos + neg  # sum(w) = 0, sum(|w|) = 1
 
-      return w
+    # Per-position weight cap, renormalize each side independently
+    if max_weight is not None:
+        pos = np.maximum(w, 0)
+        neg = np.minimum(w, 0)
+        pos = np.minimum(pos, max_weight)
+        neg = np.maximum(neg, -max_weight)
+        pos_sum = pos.sum()
+        neg_sum = np.abs(neg).sum()
+        if pos_sum > 0:
+            pos = pos / pos_sum * 0.5
+        if neg_sum > 0:
+            neg = neg / neg_sum * 0.5
+        w = pos + neg
+
+    return w
 
 if __name__ == "__main__":
     start_date  = "2005-01-03"

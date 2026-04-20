@@ -335,9 +335,9 @@ def plot_model_diagnostics(diagnostics_df, rolling_window=12):
 
 if __name__ == "__main__":
     returns_df, weights_history, diagnostics_df = run_backtest(
-        backtest_start="2023-01-06",
+        backtest_start="2013-01-06",
         backtest_end="2023-11-23",
-        lookback_days=1460,
+        lookback_days=252,
         rebalance_days=5,
         horizon=5,
         quantile=0.05,
@@ -347,8 +347,8 @@ if __name__ == "__main__":
     )
 
     print("\n── PERFORMANCE METRICS ──────────────────────────")
-    for k, v in compute_metrics(returns_df, rebalance_days=10).items():
+    for k, v in compute_metrics(returns_df, rebalance_days=5).items():
         print(f"  {k:<22}: {v}")
 
-    plot_backtest(returns_df, rebalance_days=10)
+    plot_backtest(returns_df, rebalance_days=5)
     plot_model_diagnostics(diagnostics_df)

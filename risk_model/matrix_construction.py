@@ -231,7 +231,8 @@ def implied_asset_covariance_factor_model(
       specific_var_table="specific_variance",
       cusips=None,
       store_table=None,
-      max_assets_for_full_matrix=5000
+      max_assets_for_full_matrix=5000, 
+      min_specific_var=0.04,
   ):
       # 1) Discover factors dynamically
       factor_cols = [
@@ -297,9 +298,10 @@ def implied_asset_covariance_factor_model(
       )
 
       # 4) Systematic + specific
-      systematic = B @ Sigma_f @ B.T
-      specific   = np.diag(df["specific_var_annual"].to_numpy(dtype=float))
-      Sigma      = systematic + specific
+      systematic   = B @ Sigma_f @ B.T
+      specific_var = np.maximum(df["specific_var_annual"].to_numpy(dtype=float), min_specific_var)
+      specific     = np.diag(specific_var)
+      Sigma        = systematic + specific
 
       # 5) Optionally store as long form (upper triangle)
       if store_table is not None:
